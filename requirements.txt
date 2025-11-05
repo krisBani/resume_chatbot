@@ -7,6 +7,7 @@ python-dotenv==1.0.0
 
 # OpenAI client (compatible with Groq and other providers)
 openai==1.12.0
+httpx==0.27.0
 
 # LangChain core and community
 langchain==0.1.7
