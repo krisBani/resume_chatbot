@@ -2,34 +2,23 @@ import os
 from pinecone import Pinecone, ServerlessSpec
 from langchain_pinecone import PineconeVectorStore
 from langchain_community.embeddings import CohereEmbeddings
-from langchain_openai import OpenAIEmbeddings
 
 
 class Retriever():
     """Retriever Class
     This class encapsulates the functionality for retrieving and managing documents within the Pinecone vector database.
     It handles the creation of embeddings, interaction with the Pinecone service, and the loading of documents.
-    It supports multiple embedding providers (Cohere, OpenAI, etc.) to generate vector representations of documents.
+    Uses Cohere for embeddings.
     """
     
     def __init__(self, parameters: dict[str, any]):
         self.parameters = parameters
         
-        # Initialize embeddings based on provider
-        embedding_provider = parameters.get('embedding_provider', 'cohere').lower()
-        
-        if embedding_provider == 'cohere':
-            embeddings = CohereEmbeddings(
-                cohere_api_key=parameters['embedding_api_key'],
-                model=parameters.get('embedding_model', 'embed-english-v3.0')
-            )
-        elif embedding_provider == 'openai':
-            embeddings = OpenAIEmbeddings(
-                openai_api_key=parameters['embedding_api_key'],
-                model=parameters.get('embedding_model', 'text-embedding-ada-002')
-            )
-        else:
-            raise ValueError(f"Unsupported embedding provider: {embedding_provider}")
+        # Initialize Cohere embeddings
+        embeddings = CohereEmbeddings(
+            cohere_api_key=parameters['embedding_api_key'],
+            model=parameters.get('embedding_model', 'embed-english-v3.0')
+        )
         
         self.embeddings = embeddings
         self.index_name = parameters['pinecone_index_name']
@@ -43,7 +32,7 @@ class Retriever():
         if self.index_name not in existing_indexes:
             print(f"Index '{self.index_name}' does not exist. Creating new index...")
             # Create index with appropriate dimensions based on embedding model
-            dimension = self._get_embedding_dimension(embedding_provider, parameters.get('embedding_model'))
+            dimension = self._get_embedding_dimension('cohere', parameters.get('embedding_model'))
             
             pc.create_index(
                 name=self.index_name,
@@ -64,17 +53,12 @@ class Retriever():
         )
     
     def _get_embedding_dimension(self, provider, model):
-        """Get the dimension of embeddings based on provider and model."""
+        """Get the dimension of Cohere embeddings based on model."""
         dimensions = {
             'cohere': {
                 'embed-english-v3.0': 1024,
                 'embed-english-light-v3.0': 384,
                 'embed-multilingual-v3.0': 1024,
-            },
-            'openai': {
-                'text-embedding-ada-002': 1536,
-                'text-embedding-3-small': 1536,
-                'text-embedding-3-large': 3072,
             }
         }
         
