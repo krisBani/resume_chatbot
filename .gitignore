@@ -1,5 +1,24 @@
-.github/
+# Environment and secrets
 .env
 .venv/
+venv/
+env/
+
+# IDE
 .vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Project specific
 data/
+.github/
+
+# OS
+.DS_Store
+Thumbs.db

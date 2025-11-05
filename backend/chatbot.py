@@ -1,31 +1,37 @@
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain import hub
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain.chains.retrieval import create_retrieval_chain
+from openai import OpenAI
 from langchain.prompts import PromptTemplate
 from backend.retriever import Retriever
 from datetime import datetime
 
 
-
 class ChatBot():
     """Chatbot Class
     This class encapsulates the functionality of the Resume Chatbot, which interacts with users to provide 
-    information about the resume. It leverages OpenAI's language model, LangChain's retrieval tools, 
+    information about the resume. It leverages various LLM providers (Groq, OpenAI, etc.), LangChain's retrieval tools, 
     and a custom prompt template to generate context-aware responses.
     """
 
-    def __init__(self,
-                 parameters: dict[str, any]):
+    def __init__(self, parameters: dict[str, any]):
         self.parameters = parameters
-        self.chat = ChatOpenAI(verbose=True, temperature=0)
+        
+        # Initialize OpenAI-compatible client for any provider
+        self.client = OpenAI(
+            api_key=parameters['llm_api_key'],
+            base_url=parameters.get('llm_base_url')
+        )
+        
         self.retrieval_qa_chat_prompt = self.create_prompt()
         self.retriever = Retriever(self.parameters)
         self.vector_store = self.retriever.get_vector_store()
-        self.chatbot_welcome_message = f"Hi there! I'm here to help you explore {parameters['resume_owner_name']}'s resume. Whether you're looking for his experience, skills, or qualifications, feel free to ask! This chatbot was developed entirely by {parameters['resume_owner_name']} himself to assist recruiters like you in quickly understanding his professional profile. How can I help you today?"
+        
+        self.chatbot_welcome_message = (
+            f"Hi! I'm {parameters['resume_owner_name']}. "
+            f"I've created this chatbot to help you learn more about my background, experience, and skills. "
+            f"Feel free to ask me anything about my professional journey, projects, or qualifications. "
+            f"How can I help you today?"
+        )
 
-    def answer(self, query, conversation, conv_last_n_messages = 6, fake_conversation = False):
+    def answer(self, query, conversation, conv_last_n_messages=6, fake_conversation=False):
         """Generates a response to the user's query based on the resume data and conversation history.
         
         Args:
@@ -41,31 +47,68 @@ class ChatBot():
         """
         if fake_conversation:
             # Return fake answer to test the solution without using the paid services 
-            result = {'input': 'Fake question', 'context': [], 'answer': 'This is a fake answer to test the solution without spending LLM tokens...'}
+            result = {
+                'input': 'Fake question',
+                'context': [],
+                'answer': 'This is a fake answer to test the solution without spending LLM tokens...'
+            }
             return result
         else:
-            chat = ChatOpenAI(verbose=True, temperature=0, model=self.parameters['llm_model'])
-
-            # Process the conversation history to provide context for the chatbot.
+            # Process the conversation history to provide context for the chatbot
             if len(conversation) > 2:
-                # removing first and last message
+                # Removing first and last message
                 conversation = conversation[1:-1]
-                # Keeping the last  "conv_last_n_messages" messages of the historic conversation
+                # Keeping the last "conv_last_n_messages" messages of the historic conversation
                 if conv_last_n_messages is not None: 
                     conv_last_n_messages = conv_last_n_messages * -1
                     conv_hist = "\n".join([str(entry) for entry in conversation[conv_last_n_messages:]])  
                 else:
-                    # the entire historic conversation
+                    # The entire historic conversation
                     conv_hist = "\n".join([str(entry) for entry in conversation])   
             else:
-                conv_hist = 'There is no previous messages'        
+                conv_hist = 'There is no previous messages'
+            
             current_date = datetime.now()
             current_date = current_date.strftime("%B %d, %Y")
 
-            stuff_documents_chain = create_stuff_documents_chain(chat, self.retrieval_qa_chat_prompt)
-            qa = create_retrieval_chain(
-                retriever=self.vector_store.as_retriever(search_type="hybrid"), combine_docs_chain=stuff_documents_chain)
-            result = qa.invoke(input={"input": query, "history":conv_hist, "date": current_date, "resume_owner_name": self.parameters['resume_owner_name'] })
+            # Search for relevant context from the resume
+            search_results = self.vector_store.similarity_search(query, k=3)
+            context = "\n\n".join([doc.page_content for doc in search_results])
+            
+            # Format the prompt with all necessary information
+            prompt = self.retrieval_qa_chat_prompt.format(
+                context=context,
+                history=conv_hist,
+                date=current_date,
+                resume_owner_name=self.parameters['resume_owner_name'],
+                input=query
+            )
+            
+            # Generate response using the LLM
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.parameters['llm_model'],
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant specialized in answering questions about resumes."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=self.parameters.get('llm_temperature', 0),
+                    max_tokens=500
+                )
+                
+                answer = response.choices[0].message.content
+                
+            except Exception as e:
+                # Log error and return a user-friendly message
+                print(f"Error generating response: {str(e)}")
+                answer = f"I apologize, but I encountered an error while processing your question. Please try again or rephrase your question."
+            
+            result = {
+                'input': query,
+                'context': search_results,
+                'answer': answer
+            }
+            
             return result
         
     def create_prompt(self):
@@ -79,25 +122,33 @@ class ChatBot():
             PromptTemplate: A LangChain prompt template for generating responses.
         """
         return PromptTemplate.from_template("""
-        You are a helpful assistant specialized in answering questions related to the resume of {resume_owner_name}.
-        Answer any use questions based solely on the context and conversation history shown below.
+You are {resume_owner_name}, responding to questions about your professional background and experience.
+Answer questions in the FIRST PERSON, as if you are the candidate speaking directly to the recruiter.
+
+IMPORTANT: 
+- Use "I", "my", "me" instead of "the candidate", "he/she", or your name
+- Speak naturally and professionally, as if in a conversation with a recruiter
+- Be confident but humble when discussing your accomplishments
+- Answer based solely on the context and conversation history provided below
                                                   
-        ### Context:
-        Here is the relevant information retrieved from {resume_owner_name}'s resume:
-        {context}
-        Current system Date: {date}
+### Context:
+Here is the relevant information from your resume:
+{context}
+Current system Date: {date}
 
-        ### Conversation History:
-        These are the previous exchanges between the user and the chatbot:
-        {history}
+### Conversation History:
+These are the previous exchanges in this conversation:
+{history}
 
-        ### User Input:
-        The user has just asked the following question:
-        {input}
+### User Input:
+The user has just asked the following question:
+{input}
 
-        ### Instructions:
-        Based on the provided context, the conversation history, and the user's latest question, generate a helpful and accurate response that refers to **{resume_owner_name}** qualifications, skills, experiences, and other resume-related details. Ensure the response is clear and addresses the specific user query.
-        """)
+### Instructions:
+Based on the provided context, the conversation history, and the user's latest question, generate a helpful and accurate response about your qualifications, skills, experiences, and other background. Ensure the response is clear, professional, and addresses the specific user query.
+
+If the information requested is not available in the context, politely inform the user that this specific information is not included in your resume.
+""")
 
     def get_chatbot_welcome_message(self):
         """Returns the chatbot's welcome message.
@@ -106,4 +157,3 @@ class ChatBot():
             str: A welcome message introducing the chatbot and its purpose.
         """
         return self.chatbot_welcome_message
-    
